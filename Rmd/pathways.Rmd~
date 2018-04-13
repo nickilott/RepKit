@@ -1,0 +1,137 @@
+---
+title: "Pathways analysis"
+header-includes: #allows you to add in your own Latex packages
+- \usepackage{float} #use the 'float' package
+- \floatplacement{figure}{H} #make every figure with caption = h
+
+output:
+  pdf_document:
+    fig_caption: true
+    keep_tex: true
+    latex_engine: pdflatex
+  html_document:
+    df_print: paged
+urlcolor: blue
+---
+
+```{r setup.pathways, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(out.extra = '')
+#knitr::opts_chunk$set(fig.pos = 'H')
+knitr::opts_knit$set(root.dir = "/gfs/work/nilott/proj018/analysis/biopsies/reports/rmarkdown1/data")
+```
+
+# Pathways and transcription factor motif analysis
+
+I have take the gene lists as described in the last section (UC-regulated and PSC-regulated) and run them against
+a variety of pathways databases from the MsigDB: HALLMARK genesets, KEGG genesets, TF motif genesets. There was very
+little in the way of enriched pathways among these genes.
+
+## PSC up-regulated genes
+
+### HALLMARK gene sets
+
+No significant sets.
+
+### KEGG gene sets
+
+No significant sets.
+
+### TF motif sets
+
+A number of transcription factor motifs were enriched amongst up-regulated genes in PSC. And are described
+below.
+
+```{r pathways, fig.cap="Significantly enriched transcription factor motifs in up-regulated genes in PSC", fig.height=5, fig.width=15, echo=FALSE, message=FALSE}
+
+source("/gfs/devel/nilott/stats_utils/R/pathways_helper.R")
+pathway.table <- read.csv("/gfs/work/nilott/proj018/analysis/biopsies/enrichment_psc_upregulated/tfs/c3.all.v5.1.symbols.foreground.results", header=T, stringsAsFactors=F, sep="\t")
+plotPathways(pathway.table)
+
+```
+
+\newpage
+
+# Shared genes across transcription factor motif sets
+
+It is of interest to see which genes are represented in the transcription factor motifs and which ones are shared between different motifs. Here we build a matrix
+of genes that are differentially regulated by PSC (upregulated) and see which ones are predicted to be regulated by the different transcription factors.
+
+For visualisation purposes (and maybe biological ones) I filter out "Unknown" motifs and anything less than 2 fold enriched.
+
+```{r shared-motifs, fig.cap="Differentially regulated genes and predicted transcription factor binding", fig.height=25, fig.width=10, echo=FALSE, message=FALSE}
+
+# get pathways results
+pathway.table <- read.csv("/gfs/work/nilott/proj018/analysis/biopsies/enrichment_psc_upregulated/tfs/c3.all.v5.1.symbols.foreground.results", header=T, stringsAsFactors=F, sep="\t")
+
+# take out unknown tf motifs (unnamed)
+pathway.table <- pathway.table[grep("UNKNOWN", pathway.table$goid, invert=T),]
+
+# filter on fold enrichment
+pathway.table <- pathway.table[pathway.table$ratio >= 2, ]
+
+
+# get genesets
+genesets <- read.csv("/gfs/work/nilott/proj018/analysis/biopsies/enrichment_psc_upregulated/c3.all.v5.1.symbols.tsv", header=F, stringsAsFactors=F, sep="\t")
+
+# get diff genes
+genes <- read.csv("psc_upregulated.tsv", header=F, stringsAsFactors=F, sep="\t")
+
+# just get geneset genes (in sig pathways) that are regulated by PSC
+total <- buildGenesetGenelist(pathway.table, genesets)
+total <- intersect(total, genes$V1)
+
+# build the matrix
+mat <- buildGeneMatrix(total, pathway.table, genesets)
+
+# draw heatmap
+sepr <- seq(1, nrow(mat), 1)
+sepc <- seq(1, ncol(mat), 1)
+cols <- colorRampPalette(c("white", "blue"))(2)
+distfun=function(x) dist(x, method="binary")
+heatmap.2(as.matrix(mat), trace="none", colsep=sepc, rowsep=sepr, sepcolor="grey", margins=c(15,15), col=cols, distfun=distfun)
+
+```
+
+\newpage
+
+### MEF2 expression
+
+We saw an overrepresentation of genes with MEF2 binding motifs (and others) among those that are upregulated by PSC. The MEF2
+effect is of particular interest as MEF2A itself is upregulated in PSC (see below).
+
+```{r mef2a, fig.cap="MEF2A expression in PSC vs. UC and Healthy biopsies", fig.height=2.5, fig.width=3.5, echo=FALSE, message=FALSE}
+
+plotGOI(rld2, goi="MEF2A")
+
+```
+
+\newpage
+
+## MEF2 targets
+
+Below are plots of the expression profiles of MEF2 targets predicted from the transcription factor motif analysis. These are upregulated
+in PSC vs. UC (and vs. healthy).
+
+```{r mef2targets, fig.cap="Expression of MEF2 target genes", fig.height=15, fig.width=15, echo=FALSE, message=FALSE}
+
+# get all mef2 targets
+mef.targets <- getGenesetGenes(genesets, "V$MEF2_Q6_01")
+
+# intersect with psc upregulated genes
+mef.targets.up <- intersect(genes$V1, mef.targets)
+
+# plot them
+# collect grobs for figure
+grob.list <- list()
+for (i in 1:length(mef.targets.up)){
+    goi <- mef.targets.up[i]
+    p <- plotGOI(rld2, goi=goi)
+    grob.list[[i]] <- p
+    }
+
+grid.arrange(grobs=grob.list, ncol=4, nrow=5)
+```
+

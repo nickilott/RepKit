@@ -1,0 +1,341 @@
+---
+title: "Differential Expression Results"
+header-includes: #allows you to add in your own Latex packages
+- \usepackage{float} #use the 'float' package
+- \floatplacement{figure}{H} #make every figure with caption = h
+
+output:
+  pdf_document:
+    fig_caption: true
+    keep_tex: true
+    latex_engine: pdflatex
+  html_document:
+    df_print: paged
+urlcolor: blue
+---
+
+```
+{r echo=FALSE, message=FALSE}
+
+# should add a check for this
+source("deseq2_config.R")
+```
+
+```{r setup3, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(out.extra = '')
+#knitr::opts_chunk$set(fig.pos = 'H')
+knitr::opts_knit$set(root.dir = rootdir)
+```
+
+# DESeq2 Summary Report (with BWA mapping) {#deseq2}
+
+This analysis uses DESeq2 to define differentially regulated genes across conditions. The first section deals
+with DESeq2 quality assessments and the later sections with differentially expressed genes.
+
+## Number of genes detected
+
+This section provides a look at the number of genes detected i.e read count >=1
+
+```{r detected-genes, fig.cap='Number of genes detected in each sample', fig.height=2.5, fig.width=5, echo=FALSE, message=FALSE}
+
+# get helper functions
+source(helper)
+
+# knitr for tables
+library(knitr)
+
+mat <- read.csv(feature.counts, header=T, stringsAsFactors=F, sep="\t", row.names=1)
+ngenes <- data.frame(colSums(mat >= 1))
+
+# make conditions
+ngenes$cond <- makeConds(rownames(ngenes))
+colnames(ngenes) <- c("ngenes", "cond")
+
+# plot number of genes
+ggplot(ngenes, aes(x=cond, y=ngenes, colour=cond)) + geom_boxplot() + geom_jitter() + theme_bw()
+
+```
+
+### ANOVA of number of genes detected
+
+This is a test of significant differences in the number of genes detected.
+
+```{r sig-difference-in-genes-detected}
+
+summary(aov(ngenes$ngenes~ngenes$cond))
+
+```
+
+\newpage
+
+## Quality control of DESeq2 normalisation procedures
+
+```{r diff-expression, fig.cap='Mean-variance and dispersion estimates from DESeq2', fig.height=4, fig.width=8,  echo=FALSE, message=FALSE}
+
+library(DESeq2)
+library(vsn)
+library(RSQLite)
+library(grid)
+library(gridBase)
+
+####################
+# analysis
+####################
+
+mat <- read.csv("genes.tsv.gz", header=T, stringsAsFactors=F, sep="\t", row.names=1)
+coldata <- makeColData(mat)
+
+dds <- DESeqDataSetFromMatrix(countData = mat,
+                              colData = coldata,
+			      design = ~ condition)
+
+# add features (gene names)
+featureData <- makeFeatureData(annotations.db, mat)
+mcols(dds) <- DataFrame(mcols(dds), featureData)
+
+# filtering > a in at least k samples (i.e. all of one condition)
+keep <- rowSums(counts(dds) >= a) >= k
+dds <- dds[keep,]
+
+# make sure conditions are factors
+dds$condition <- factor(dds$condition)
+
+# run analysis
+dds.lrt <- DESeq(dds, test="LRT", reduced=~1)
+res <- results(dds.lrt)
+
+# read in rlog data NB: SHOULD HAVE USED SAME FILTERING CRITERIA AS FOR
+# ANALYSIS. The rlog file is not produced here.
+rld <- read.csv(norm.file, sep="\t", stringsAsFactors=F, header=T)
+rownames(rld) <- rld$gene_id
+rld <- rld[,c(1:ncol(rld)-1)]
+
+# plot mean-variance relationship and dispersion
+# estimates
+
+par(mfrow=c(1,2))
+plotMeanSd(rld)
+plotDispEsts(dds.lrt)
+
+```
+
+\newpage
+
+# Principle components analysis
+
+Here we perform principle components analysis on normalised read counts (rlog) from DESeq2. This gives an
+idea of the structure of the data and whether there is an obvious difference between groups.
+
+```{r pca, fig.cap='Principle components analysis', fig.height=15, fig.width=20,  echo=FALSE, message=FALSE}
+
+df <- rld
+pc <- PCA(df)
+pcs <- getPCA(pc)
+
+# plot cumulative proportion
+p1 <- plotCumulativeProportion(pc)
+
+# plot principle components
+p2 <- plotPCA(pc, pcs=c("PC1", "PC2"))
+p3 <- plotPCA(pc, pcs=c("PC1", "PC3"))
+p4 <- plotPCA(pc, pcs=c("PC2", "PC3"))
+
+layout = rbind(c(1,1,1), c(2,3,4))
+grid.arrange(grobs=list(p1,p2,p3,p4), layout_matrix=layout)
+
+```
+
+# Overall differential expression analysis
+
+Here we describe genes that were called as differentially expressed. If there are multiple levels per factor
+then it is an overall test (ANOVA-like) whereas if just two conditions are present then it is the direct contrast.
+
+```{r de, fig.cap='Differential expression analysis', fig.height=15, fig.width=10,  echo=FALSE, message=FALSE}
+
+library(gplots)
+
+res2 <- getResultsTable(res, featureData)
+
+# subset for genes that are differentially regulated
+res.diff <- res2[res2$padj < 0.05 & !(is.na(res2$padj)) & !(is.na(res2$log2FoldChange)),]
+
+# get number different
+ndiff <- nrow(res.diff)
+df <- data.frame("Number DE" = ndiff)
+kable(df, caption="number of genes differentially expressed at p < 0.05")
+
+# get differentially expressed gene ids
+diffgenes <- res.diff$gene_id
+diff <- rld[diffgenes, ]
+
+# heatmap differences
+heatmapMatrix(diff)
+
+# table the top 50
+toshow <- res.diff[order(res.diff$padj, decreasing=F),][1:50,]
+kable(toshow, caption="top 50 differentially expressed genes by adjusted pvalue", row.names=F)
+
+```
+
+# Pattern of regulation in the top genes
+
+As the analysis was done ANOVA style we don't clearly know (without specifying the contrasts) the pattern of regulation
+of these genes. Here we plot the top (20) genes to see what the pattern is.
+
+```{r goi, fig.cap='Expression pattern in top 20 genes', fig.height=15, fig.width=15,  echo=FALSE, message=FALSE}
+
+# get gene names
+rld2 <- rld
+
+# get rid of any weird duplicates
+res.diff <- res.diff[!(duplicated(res.diff$gene_name)),]
+res.diff <- res.diff[order(res.diff$padj, decreasing=F),]
+
+# make gene names the rownames
+rld2 <- rld2[rownames(res.diff),]
+rownames(rld2) <- res.diff[rownames(rld2),]$gene_name
+
+# collect grobs for figure
+grob.list <- list()
+for (i in 1:20){
+    goi <- rownames(rld2)[i]
+    p <- plotGOI(rld2, goi=goi)
+    grob.list[[i]] <- p
+    }
+
+grid.arrange(grobs=grob.list, ncol=4, nrow=5)
+
+```
+\newpage
+
+# Specific contrasts
+
+We have three different comparisons to look at - PSC vs. healthy, UC vs. healthy and PSC vs. UC. Here we plot
+the differentially expressed genes in each contrast. 
+
+```{r contrasts, fig.cap='MA plot for each contrast', fig.height=5, fig.width=15,  echo=FALSE, message=FALSE}
+
+###########################################################
+###########################################################
+# In order to get specific contrast p-values we need
+# to run the wald test for each contrast
+# However we only consider things significant if they
+# are also significant in the full LRT test
+###########################################################
+###########################################################
+
+# get contrasts (PSC vs. UC)
+
+dds.psc.uc <- dds
+dds.psc.uc <- DESeq(dds.psc.uc, test="Wald")
+psc.uc <- getContrast(dds.psc.uc, factor=c("condition"),contrast=c("PSC", "UC"))
+
+# PSC vs. healthy
+dds.psc.healthy <- dds
+dds.psc.healthy <- DESeq(dds.psc.healthy, test="Wald")
+psc.healthy <- getContrast(dds.psc.healthy, factor=c("condition"), contrast=c("PSC", "HEALTHY"))
+
+# UC vs. healthy
+dds.uc.healthy <- dds
+dds.uc.healthy <- DESeq(dds.uc.healthy, test="Wald")
+uc.healthy <- getContrast(dds.uc.healthy, factor=c("condition"), contrast=c("UC", "HEALTHY"))
+
+
+# full set from LRT
+lrt.set <- diffgenes
+
+p1 <- MAPlot(uc.healthy, test.in=T, test.set=lrt.set, title="UC vs. HEALTHY")
+p2 <- MAPlot(psc.healthy, test.in=T, test.set=lrt.set, title="PSC vs. HEALTHY")
+p3 <- MAPlot(psc.uc, test.in=T, test.set=lrt.set, title="PSC vs. UC")
+
+grid.arrange(p1,p2,p3, nrow=1, ncol=3)
+
+# display tables of the top (50) differentially expressed genes in each contrast
+uc.healthy.diff <- getResultsTable(uc.healthy, featureData)
+uc.healthy.diff <- uc.healthy.diff[uc.healthy.diff$padj < 0.05 & abs(uc.healthy.diff$log2FoldChange) > lfc & !(is.na(uc.healthy.diff$padj)) & !(is.na(uc.healthy.diff$log2FoldChange)) & uc.healthy.diff$gene_id %in% lrt.set, ]
+uc.healthy.diff <- uc.healthy.diff[order(uc.healthy.diff$padj, decreasing=F),]
+
+psc.healthy.diff <- getResultsTable(psc.healthy, featureData)
+psc.healthy.diff <- psc.healthy.diff[psc.healthy.diff$padj < 0.05 & abs(psc.healthy.diff$log2FoldChange) > lfc & !(is.na(psc.healthy.diff$padj)) & !(is.na(psc.healthy.diff$log2FoldChange)) & psc.healthy.diff$gene_id %in% lrt.set, ]
+psc.healthy.diff <- psc.healthy.diff[order(psc.healthy.diff$padj, decreasing=F),]
+
+psc.uc.diff <- getResultsTable(psc.uc, featureData)
+psc.uc.diff <- psc.uc.diff[psc.uc.diff$padj < 0.05 & abs(psc.uc.diff$log2FoldChange) > lfc & !(is.na(psc.uc.diff$padj)) & !(is.na(psc.uc.diff$log2FoldChange)) & psc.uc.diff$gene_id %in% lrt.set, ]
+psc.uc.diff <- psc.uc.diff[order(psc.uc.diff$padj, decreasing=F),]
+
+kable(uc.healthy.diff[1:14,], caption="UC vs. HEALTHY (top 14)", row.names=F)
+kable(psc.healthy.diff[1:50,], caption="PSC vs. HEALTHY (top 50)", row.names=F)
+kable(psc.uc.diff[1:50,], caption="PSC vs. UC (top 50)", row.names=F)
+
+```
+
+\newpage
+
+## Venn diagram of the overlap between contrasts
+
+```{r venn-overlap, fig.cap="Venn of the overlap between contrasts", fig.height=2.5, fig.width=2.5, echo=FALSE, message=FALSE}
+
+library(VennDiagram)
+
+nuc <- nrow(uc.healthy.diff)
+npsc <- nrow(psc.healthy.diff)
+npsc.uc <- nrow(psc.uc.diff)
+
+noverlap1 <- length(intersect(rownames(uc.healthy.diff), rownames(psc.healthy.diff)))
+noverlap2 <- length(intersect(rownames(psc.healthy.diff), rownames(psc.uc.diff)))
+noverlap3 <- length(intersect(rownames(uc.healthy.diff), rownames(psc.uc.diff)))
+
+# all
+noverlap4 <- length(intersect(intersect(rownames(uc.healthy.diff), rownames(psc.healthy.diff)), rownames(psc.uc.diff)))
+
+categories <- c("UC vs. HEALTHY", "PSC vs. HEALTHY", "PSC vs. UC")
+
+venn1 <- draw.triple.venn(nuc, npsc, npsc.uc, noverlap1, noverlap2, noverlap3, noverlap4, category=categories, fill=c("red", "green", "blue"), euler.d=T, scaled=T, font.family=rep("sans", 7), cat.cex=rep(0.5,3))
+grid.draw(venn1)
+
+```
+
+The venn diagram shows us that any (well almost) gene that is regulated in UC is also regulated in PSC i.e. the common aspects
+of UC and PSC UC. However there is a substantial component that is specific to PSC. For downstream analysis I will focus
+on two sets of genes - those that are regulated (up and down) in UC vs. HEALTHY (this also encompasses a significant proportion
+of the differences seen in PSC vs. healthy) and those genes that are specifically regulated in PSC i.e. the genes that
+are regulated in PSC vs. healthy and PSC vs. UC.
+
+```{r write-lists, echo=FALSE, message=FALSE}
+
+# lists of UC regulated genes
+ucgenes.up <- uc.healthy.diff$gene_name[uc.healthy.diff$log2FoldChange > 0]
+ucgenes.dn <- uc.healthy.diff$gene_name[uc.healthy.diff$log2FoldChange < 0]
+
+# lists of PSC regulated genes
+psc.healthy.up <- psc.healthy.diff[psc.healthy.diff$log2FoldChange > 0,]
+psc.uc.up <- psc.uc.diff[psc.uc.diff$log2FoldChange > 0,]
+
+psc.healthy.dn <- psc.healthy.diff[psc.healthy.diff$log2FoldChange < 0,]
+psc.uc.dn <- psc.uc.diff[psc.uc.diff$log2FoldChange < 0,]
+
+pscgenes.up <- intersect(psc.healthy.up$gene_name, psc.uc.up$gene_name)
+pscgenes.dn <- intersect(psc.healthy.dn$gene_name, psc.uc.dn$gene_name)
+
+# take out those regulated in UC
+pscgenes.up <- setdiff(pscgenes.up, ucgenes.up)
+pscgenes.dn <- setdiff(pscgenes.dn, ucgenes.dn)
+
+# write out lists
+write.table(ucgenes.up, file="../data/uc_upregulated.tsv", sep="\t", col.names=F, row.names=F, quote=F)
+write.table(ucgenes.dn, file="../data/uc_downregulated.tsv", sep="\t", col.names=F, row.names=F, quote=F)
+
+write.table(pscgenes.up, file="../data/psc_upregulated.tsv", sep="\t", col.names=F, row.names=F, quote=F)
+write.table(pscgenes.dn, file="../data/psc_downregulated.tsv", sep="\t", col.names=F, row.names=F, quote=F)
+
+# write out background gene list
+write.table(res2$gene_name, file="../data/background.tsv", sep="\t", col.names=F, row.names=F, quote=F)
+
+```
+\newpage
+
+
+
