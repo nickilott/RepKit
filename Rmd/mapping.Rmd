@@ -16,6 +16,7 @@ urlcolor: blue
 
 ```{r echo=FALSE, message=FALSE}
 source(readstats.helper)
+source(config.R)
 ```
 
 ```{r setup2, include=FALSE}
@@ -33,6 +34,7 @@ This section deals with mapping results. It plots the total number of reads for 
 and the proportion of reads that mapped.
 
 ```{r mapping, fig.cap='Mapping statistics on a per sample and per condition basis', fig.height=8, fig.width=8,  echo=FALSE, message=FALSE}
+library(gridExtra)
 
 df <- getReadCounts(mapping.db)
 p1 <- plotReadsSummary(df)
