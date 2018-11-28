@@ -15,7 +15,7 @@ urlcolor: blue
 ---
 
 ```{r echo=FALSE, message=FALSE}
-source(config.R)
+source("config.R")
 source(readstats.helper)
 ```
 
